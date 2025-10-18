@@ -1,0 +1,6 @@
+.env
+.env/
+.eliza/
+eliza/
+env/
+node_modules/

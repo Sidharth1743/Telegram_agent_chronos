@@ -1,0 +1,3 @@
+[submodule "chronos"]
+    path = /home/sidharth/Desktop/eliza-tg-1/telegram-bot/chronos
+	url = https://github.com/Sidharth1743/HeritageNet-example.git
