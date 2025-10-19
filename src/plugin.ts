@@ -482,100 +482,75 @@ const plugin: Plugin = {
             if (resultsMatch && resultsMatch[1]) {
               const resultsBlock = resultsMatch[1];
 
-              // Parse questions and answers
+              // Parse questions and answers (handling multi-line answers)
               const questions: string[] = [];
               const answers: string[] = [];
 
-              const lines = resultsBlock.split('\n');
-              for (const line of lines) {
-                if (line.startsWith('QUESTION_')) {
-                  const question = line.split(':::')[1];
-                  if (question) questions.push(question.trim());
-                } else if (line.startsWith('ANSWER_')) {
-                  const answer = line.split(':::')[1];
-                  if (answer) answers.push(answer.trim());
+              // Split by the --- separator to get each Q&A pair
+              const qaPairs = resultsBlock.split('---').filter(pair => pair.trim().length > 0);
+
+              for (const pair of qaPairs) {
+                const lines = pair.trim().split('\n');
+                let currentQuestion = '';
+                let currentAnswerLines: string[] = [];
+                let inAnswer = false;
+
+                for (const line of lines) {
+                  if (line.startsWith('QUESTION_')) {
+                    const question = line.split(':::')[1];
+                    if (question) currentQuestion = question.trim();
+                  } else if (line.startsWith('ANSWER_')) {
+                    const answerFirstLine = line.split(':::')[1];
+                    if (answerFirstLine) currentAnswerLines.push(answerFirstLine.trim());
+                    inAnswer = true;
+                  } else if (inAnswer && line.trim()) {
+                    // Continuation of the answer
+                    currentAnswerLines.push(line.trim());
+                  }
+                }
+
+                if (currentQuestion) questions.push(currentQuestion);
+                if (currentAnswerLines.length > 0) {
+                  // Join all answer lines back together with newlines
+                  answers.push(currentAnswerLines.join('\n\n'));
                 }
               }
 
               if (questions.length > 0 && answers.length > 0) {
-                // Telegram has a 4096 character limit per message
-                const TELEGRAM_MAX_LENGTH = 4000; // Leave some buffer
-
-                // Send header message
-                if (params.callback) {
-                  await params.callback({
-                    text: '✅ Chronos Analysis Complete!\n\n📊 Hypothesis Verification Results:',
-                    source: 'telegram',
-                  });
-                }
-
-                // Send each Q&A pair as a separate message to avoid truncation
+                // Send each Q&A pair, splitting long answers by paragraph
                 for (let i = 0; i < Math.min(questions.length, answers.length); i++) {
                   const question = questions[i];
                   const answer = answers[i];
 
-                  let messageText = `\n${i + 1}. ${question}\n\n`;
-                  messageText += `Answer: ${answer}`;
+                  // Split answer by paragraphs (double newline)
+                  const paragraphs = answer.split('\n\n').filter(p => p.trim().length > 0);
 
-                  // If answer is too long for one message, split it
-                  if (messageText.length > TELEGRAM_MAX_LENGTH) {
-                    // Send question first
+                  if (paragraphs.length === 0) {
+                    // No paragraphs, send as-is
                     if (params.callback) {
                       await params.callback({
-                        text: `\n${i + 1}. ${question}\n\nAnswer (part 1):`,
+                        text: `\n${i + 1}. ${question}\n\nAnswer: ${answer}`,
+                        source: 'telegram',
+                      });
+                    }
+                  } else {
+                    // Send first paragraph with question
+                    if (params.callback) {
+                      await params.callback({
+                        text: `\n${i + 1}. ${question}\n\nAnswer: ${paragraphs[0]}`,
                         source: 'telegram',
                       });
                     }
 
-                    // Split answer into chunks
-                    const answerChunks: string[] = [];
-                    let remainingAnswer = answer;
-
-                    while (remainingAnswer.length > 0) {
-                      const chunkSize = TELEGRAM_MAX_LENGTH - 50; // Buffer for "part X" text
-                      let chunk = remainingAnswer.substring(0, chunkSize);
-
-                      // Try to break at a sentence or paragraph
-                      if (remainingAnswer.length > chunkSize) {
-                        const lastPeriod = chunk.lastIndexOf('. ');
-                        const lastNewline = chunk.lastIndexOf('\n');
-                        const breakPoint = Math.max(lastPeriod, lastNewline);
-
-                        if (breakPoint > chunkSize * 0.7) { // Only break if we're not losing too much
-                          chunk = chunk.substring(0, breakPoint + 1);
-                        }
-                      }
-
-                      answerChunks.push(chunk);
-                      remainingAnswer = remainingAnswer.substring(chunk.length).trim();
-                    }
-
-                    // Send each chunk
-                    for (let j = 0; j < answerChunks.length; j++) {
+                    // Send remaining paragraphs as continuations
+                    for (let j = 1; j < paragraphs.length; j++) {
                       if (params.callback) {
-                        const prefix = j === 0 ? '' : `Answer (part ${j + 1}): `;
                         await params.callback({
-                          text: prefix + answerChunks[j],
+                          text: `Continuation: ${paragraphs[j]}`,
                           source: 'telegram',
                         });
                       }
                     }
-                  } else {
-                    // Message fits in one, send it
-                    if (params.callback) {
-                      await params.callback({
-                        text: messageText,
-                        source: 'telegram',
-                      });
-                    }
-                  }
-
-                  // Add separator between questions
-                  if (i < questions.length - 1 && params.callback) {
-                    await params.callback({
-                      text: '---',
-                      source: 'telegram',
-                    });
                   }
                 }
 
@@ -644,7 +619,7 @@ const plugin: Plugin = {
     ],
   },
   services: [StarterService],
-  actions: [helloWorldAction, telegramImageAction],
+  actions: [helloWorldAction],
   providers: [helloWorldProvider],
 };
 

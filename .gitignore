@@ -4,3 +4,6 @@
 eliza/
 env/
 node_modules/
+chronos_output/
+hypothesis_results/
+/home/sidharth/Desktop/eliza-tg-1/telegram-bot/chronos/__pycache__

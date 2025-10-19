@@ -99,121 +99,6 @@ var helloWorldAction = {
     ]
   ]
 };
-var telegramImageAction = {
-  name: "PROCESS_TELEGRAM_IMAGE",
-  similes: ["ANALYZE_IMAGE", "DESCRIBE_IMAGE", "VIEW_IMAGE"],
-  description: "Processes and analyzes images uploaded via Telegram",
-  validate: async (_runtime, message, _state) => {
-    const hasAttachments = message.content.attachments && Array.isArray(message.content.attachments);
-    if (!hasAttachments)
-      return false;
-    const hasImage = message.content.attachments.some((attachment) => attachment.type === "image" || attachment.contentType?.startsWith("image/"));
-    logger.info({ hasImage, attachments: message.content.attachments }, "Image validation");
-    return hasImage;
-  },
-  handler: async (runtime, message, _state, _options, callback, _responses) => {
-    try {
-      logger.info("Processing Telegram image");
-      const imageAttachments = message.content.attachments?.filter((attachment) => attachment.type === "image" || attachment.contentType?.startsWith("image/"));
-      if (!imageAttachments || imageAttachments.length === 0) {
-        return {
-          text: "No images found in message",
-          success: false
-        };
-      }
-      const imageData = imageAttachments.map((attachment) => ({
-        url: attachment.url,
-        description: attachment.description || "No description available",
-        contentType: attachment.contentType,
-        source: attachment.source || "telegram"
-      }));
-      logger.info({ imageData }, "Extracted image data");
-      let responseText = `I received ${imageAttachments.length} image(s):
-
-`;
-      imageAttachments.forEach((img, idx) => {
-        responseText += `Image ${idx + 1}:
-`;
-        responseText += `- URL: ${img.url}
-`;
-        if (img.description && img.description !== "No description available") {
-          responseText += `- Description: ${img.description}
-`;
-        }
-        responseText += `
-`;
-      });
-      const responseContent = {
-        text: responseText,
-        actions: ["PROCESS_TELEGRAM_IMAGE"],
-        source: message.content.source,
-        metadata: {
-          imageCount: imageAttachments.length,
-          images: imageData
-        }
-      };
-      await callback(responseContent);
-      return {
-        text: `Successfully processed ${imageAttachments.length} image(s)`,
-        values: {
-          success: true,
-          imageCount: imageAttachments.length,
-          images: imageData
-        },
-        data: {
-          actionName: "PROCESS_TELEGRAM_IMAGE",
-          messageId: message.id,
-          timestamp: Date.now(),
-          imageData
-        },
-        success: true
-      };
-    } catch (error) {
-      logger.error({ error }, "Error processing Telegram image:");
-      return {
-        text: "Failed to process image",
-        values: {
-          success: false,
-          error: "IMAGE_PROCESSING_FAILED"
-        },
-        data: {
-          actionName: "PROCESS_TELEGRAM_IMAGE",
-          error: error instanceof Error ? error.message : String(error)
-        },
-        success: false,
-        error: error instanceof Error ? error : new Error(String(error))
-      };
-    }
-  },
-  examples: [
-    [
-      {
-        name: "{{name1}}",
-        content: {
-          text: "Here is a photo",
-          attachments: [
-            {
-              type: "image",
-              url: "https://api.telegram.org/file/bot<token>/photo.jpg",
-              description: "A sample photo"
-            }
-          ]
-        }
-      },
-      {
-        name: "{{name2}}",
-        content: {
-          text: `I received 1 image(s):
-
-Image 1:
-- URL: https://api.telegram.org/file/bot<token>/photo.jpg
-- Description: A sample photo`,
-          actions: ["PROCESS_TELEGRAM_IMAGE"]
-        }
-      }
-    ]
-  ]
-};
 var helloWorldProvider = {
   name: "HELLO_WORLD_PROVIDER",
   description: "A simple example provider",
@@ -373,86 +258,70 @@ This may take 1-2 minutes. Please wait...`,
               const resultsBlock = resultsMatch[1];
               const questions = [];
               const answers = [];
-              const lines = resultsBlock.split(`
+              const qaPairs = resultsBlock.split("---").filter((pair) => pair.trim().length > 0);
+              for (const pair of qaPairs) {
+                const lines = pair.trim().split(`
 `);
-              for (const line of lines) {
-                if (line.startsWith("QUESTION_")) {
-                  const question = line.split(":::")[1];
-                  if (question)
-                    questions.push(question.trim());
-                } else if (line.startsWith("ANSWER_")) {
-                  const answer = line.split(":::")[1];
-                  if (answer)
-                    answers.push(answer.trim());
+                let currentQuestion = "";
+                let currentAnswerLines = [];
+                let inAnswer = false;
+                for (const line of lines) {
+                  if (line.startsWith("QUESTION_")) {
+                    const question = line.split(":::")[1];
+                    if (question)
+                      currentQuestion = question.trim();
+                  } else if (line.startsWith("ANSWER_")) {
+                    const answerFirstLine = line.split(":::")[1];
+                    if (answerFirstLine)
+                      currentAnswerLines.push(answerFirstLine.trim());
+                    inAnswer = true;
+                  } else if (inAnswer && line.trim()) {
+                    currentAnswerLines.push(line.trim());
+                  }
+                }
+                if (currentQuestion)
+                  questions.push(currentQuestion);
+                if (currentAnswerLines.length > 0) {
+                  answers.push(currentAnswerLines.join(`
+
+`));
                 }
               }
               if (questions.length > 0 && answers.length > 0) {
-                const TELEGRAM_MAX_LENGTH = 4000;
-                if (params.callback) {
-                  await params.callback({
-                    text: `✅ Chronos Analysis Complete!
-
-\uD83D\uDCCA Hypothesis Verification Results:`,
-                    source: "telegram"
-                  });
-                }
                 for (let i = 0;i < Math.min(questions.length, answers.length); i++) {
                   const question = questions[i];
                   const answer = answers[i];
-                  let messageText = `
-${i + 1}. ${question}
+                  const paragraphs = answer.split(`
 
-`;
-                  messageText += `Answer: ${answer}`;
-                  if (messageText.length > TELEGRAM_MAX_LENGTH) {
+`).filter((p) => p.trim().length > 0);
+                  if (paragraphs.length === 0) {
                     if (params.callback) {
                       await params.callback({
                         text: `
 ${i + 1}. ${question}
 
-Answer (part 1):`,
+Answer: ${answer}`,
                         source: "telegram"
                       });
-                    }
-                    const answerChunks = [];
-                    let remainingAnswer = answer;
-                    while (remainingAnswer.length > 0) {
-                      const chunkSize = TELEGRAM_MAX_LENGTH - 50;
-                      let chunk = remainingAnswer.substring(0, chunkSize);
-                      if (remainingAnswer.length > chunkSize) {
-                        const lastPeriod = chunk.lastIndexOf(". ");
-                        const lastNewline = chunk.lastIndexOf(`
-`);
-                        const breakPoint = Math.max(lastPeriod, lastNewline);
-                        if (breakPoint > chunkSize * 0.7) {
-                          chunk = chunk.substring(0, breakPoint + 1);
-                        }
-                      }
-                      answerChunks.push(chunk);
-                      remainingAnswer = remainingAnswer.substring(chunk.length).trim();
-                    }
-                    for (let j = 0;j < answerChunks.length; j++) {
-                      if (params.callback) {
-                        const prefix = j === 0 ? "" : `Answer (part ${j + 1}): `;
-                        await params.callback({
-                          text: prefix + answerChunks[j],
-                          source: "telegram"
-                        });
-                      }
                     }
                   } else {
                     if (params.callback) {
                       await params.callback({
-                        text: messageText,
+                        text: `
+${i + 1}. ${question}
+
+Answer: ${paragraphs[0]}`,
                         source: "telegram"
                       });
                     }
-                  }
-                  if (i < questions.length - 1 && params.callback) {
-                    await params.callback({
-                      text: "---",
-                      source: "telegram"
-                    });
+                    for (let j = 1;j < paragraphs.length; j++) {
+                      if (params.callback) {
+                        await params.callback({
+                          text: `Continuation: ${paragraphs[j]}`,
+                          source: "telegram"
+                        });
+                      }
+                    }
                   }
                 }
                 logger.info(`Successfully sent ${questions.length} hypothesis results to Telegram`);
@@ -523,7 +392,7 @@ Please check the logs for more details.`,
     ]
   },
   services: [StarterService],
-  actions: [helloWorldAction, telegramImageAction],
+  actions: [helloWorldAction],
   providers: [helloWorldProvider]
 };
 var plugin_default = plugin;
@@ -666,5 +535,5 @@ export {
   character
 };
 
-//# debugId=13D209687545016F64756E2164756E21
+//# debugId=008DCE42948CA68164756E2164756E21
 //# sourceMappingURL=index.js.map
